@@ -42,7 +42,7 @@ class MainActivity : ComponentActivity() {
 class PlaySession(val list: List<Channel>, val index: Int)
 
 @Composable
-fun App(vm: MainViewModel = viewModel()) {
+fun App(vm: MainViewModel = viewModel(), updates: UpdateViewModel = viewModel()) {
     var session by remember { mutableStateOf<PlaySession?>(null) }
     var setup by remember { mutableStateOf(vm.playlistUrl.isBlank()) }
     var autoStarted by remember { mutableStateOf(false) }
@@ -76,8 +76,12 @@ fun App(vm: MainViewModel = viewModel()) {
         )
         else -> BrowseScreen(
             vm = vm,
+            updates = updates,
             onPlay = { list, i -> session = PlaySession(list, i) },
             onSettings = { setup = true },
         )
     }
+
+    // Hộp thoại cập nhật (mở từ nút "Kiểm tra cập nhật" trong ngăn nhóm kênh)
+    UpdateDialog(updates)
 }

@@ -51,6 +51,7 @@ Kotlin + Jetpack Compose + Media3 (ExoPlayer).
 | `MainViewModel.kt` | Trạng thái: kênh, yêu thích, EPG, cache |
 | `BrowseScreen.kt` | Màn hình chính: xem trước + bảng lịch kênh/chương trình |
 | `GuideModel.kt` | Chia EPG thành các ô trên bảng lịch |
+| `Updater.kt`, `UpdateViewModel.kt`, `UpdateDialog.kt` | Kiểm tra, tải và cài bản cập nhật từ GitHub Releases |
 | `PlayerFactory.kt` | Tạo ExoPlayer dùng chung (xem trước + toàn màn hình) |
 | `PlayerScreen.kt` | Trình phát ExoPlayer, thanh thông tin, bảng chọn kênh |
 | `SetupScreen.kt` | Nhập link playlist / EPG |
@@ -72,3 +73,17 @@ Icon app: `app/src/main/res/drawable/ic_launcher.xml` (vector). Banner trên mà
 ## Chỉnh bảng lịch
 Đầu file `BrowseScreen.kt`: `LEFT_W` (cột tên kênh), `ROW_H` (cao mỗi hàng), `DP_PER_MIN` (độ rộng theo phút),
 `GUIDE_HOURS` (số giờ hiển thị). Kênh không có `tvg-id` khớp EPG sẽ hiện "Không có thông tin".
+
+## Cập nhật trong app (không cần tải lại APK bằng tay)
+- Mỗi lần push mã lên nhánh master, GitHub Actions build APK, ký bằng khóa cố định và tạo một **Release** `v<số lượt build>` kèm `MyTivi.apk`.
+- Trong app: bấm ◄ mở ngăn nhóm kênh > **Kiểm tra cập nhật**. Có bản mới thì bấm **Cập nhật ngay**; app tải về và mở trình cài đặt của Android.
+- App tự kiểm tra ngầm mỗi lần mở; có bản mới thì nút cập nhật đổi màu xanh.
+- Lần đầu cập nhật, Android hỏi cho phép MyTivi "cài ứng dụng không rõ nguồn gốc"; bật một lần là xong.
+- Link tải bản mới nhất (dùng cho app Downloader trên box):
+  `https://github.com/<tài-khoản>/<repo>/releases/latest/download/MyTivi.apk`
+- Repo phải để **Public** thì app mới đọc được bản phát hành.
+
+### Khóa ký (bắt buộc, làm một lần)
+Thêm 2 secret ở repo > Settings > Secrets and variables > Actions: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`.
+Không có 2 secret này thì workflow dừng ngay ở bước "Prepare signing key".
+Giữ kỹ file khóa: mất khóa thì không cập nhật đè được nữa, phải gỡ app cài lại.

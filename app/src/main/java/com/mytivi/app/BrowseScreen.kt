@@ -95,6 +95,7 @@ private const val GUIDE_HOURS = 12   // bảng lịch hiển thị 12 giờ kể
 @Composable
 fun BrowseScreen(
     vm: MainViewModel,
+    updates: UpdateViewModel,
     onPlay: (List<Channel>, Int) -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -217,6 +218,7 @@ fun BrowseScreen(
                 number = focusedNumber,
                 prog = focusedProg,
                 now = now,
+                updateAvailable = updates.updateAvailable,
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
         }
@@ -285,6 +287,15 @@ fun BrowseScreen(
             onHover = { sel = it },
             onRefresh = { vm.refresh() },
             onSettings = onSettings,
+            updateLabel = when (val u = updates.state) {
+                is UpdateState.Available -> "Cập nhật lên bản ${u.info.versionName}"
+                is UpdateState.Checking -> "Đang kiểm tra cập nhật…"
+                is UpdateState.Downloading -> "Đang tải bản cập nhật…"
+                else -> "Kiểm tra cập nhật"
+            },
+            updateHighlight = updates.updateAvailable,
+            version = updates.currentVersion,
+            onUpdate = { updates.onButton() },
             onClose = {
                 showDrawer = false
                 focusTick++
@@ -336,6 +347,7 @@ private fun InfoPanel(
     number: Int,
     prog: Programme?,
     now: Long,
+    updateAvailable: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
@@ -374,6 +386,15 @@ private fun InfoPanel(
                 overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.weight(1f))
+            if (updateAvailable) {
+                Text(
+                    "Có bản cập nhật mới. Bấm ◄ mở ngăn bên trái, chọn \"Cập nhật\".",
+                    color = Accent,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
                 "OK: toàn màn hình   ◄: nhóm kênh, làm mới, cài đặt",
                 color = Dim,
@@ -386,10 +407,10 @@ private fun InfoPanel(
 }
 
 @Composable
-private fun MenuButton(label: String, onClick: () -> Unit) {
+private fun MenuButton(label: String, onClick: () -> Unit, color: Color = Color.White) {
     Text(
         label,
-        color = Color.White,
+        color = color,
         fontSize = 16.sp,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -571,6 +592,10 @@ private fun GroupDrawer(
     onHover: (Int) -> Unit,
     onRefresh: () -> Unit,
     onSettings: () -> Unit,
+    updateLabel: String,
+    updateHighlight: Boolean,
+    version: String,
+    onUpdate: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -641,6 +666,7 @@ private fun GroupDrawer(
         Spacer(Modifier.height(8.dp))
         MenuButton(if (loading) "Đang làm mới…" else "Làm mới", onRefresh)
         MenuButton("Cài đặt", onSettings)
+        MenuButton(updateLabel, onUpdate, color = if (updateHighlight) Accent else Color.White)
         Spacer(Modifier.height(4.dp))
         if (loading) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 14.dp)) {
@@ -649,6 +675,7 @@ private fun GroupDrawer(
             }
         }
         Text(status, color = Dim, fontSize = 12.sp, maxLines = 1, modifier = Modifier.padding(start = 14.dp, top = 2.dp))
+        Text("Phiên bản $version", color = Dim, fontSize = 12.sp, maxLines = 1, modifier = Modifier.padding(start = 14.dp))
         error?.let {
             Text(
                 it,
