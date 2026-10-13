@@ -11,13 +11,16 @@ Kotlin + Jetpack Compose + Media3 (ExoPlayer).
 - **Giao diện lịch phát sóng kiểu TiviMate**: khung xem trước + thông tin chương trình ở trên;
   bên dưới là thanh thời gian và bảng kênh với các ô chương trình, có vạch "bây giờ"
 - Lướt tới kênh/ô nào thì khung xem trước (bo góc mềm, **có tiếng**) tự chạy kênh đó
-- **Nhóm kênh là ngăn kéo ẩn bên trái**: ở cột tên kênh bấm **◄** để mở, bấm **►** hoặc OK để đóng;
-  di chuyển trong ngăn thì danh sách kênh đổi theo nhóm; ô tìm kiếm nằm ngay trong ngăn
+- **Nhóm kênh là ngăn kéo ẩn bên trái**: ở cột tên kênh bấm **◄** để mở, bấm **►** để đóng;
+  di chuyển trong ngăn thì danh sách kênh đổi theo nhóm; ô tìm kiếm ở trên, **Làm mới** và **Cài đặt** nằm ở dưới cùng của ngăn
+- Phần thông tin bên phải khung xem trước chỉ gồm: chương trình đang phát, giờ bắt đầu - kết thúc, thời gian còn lại
+- Thanh thời gian có mũi tên tam giác đánh dấu giờ hiện tại (thay cho vạch dọc)
 - ☆ cạnh tên kênh để thêm/bỏ yêu thích; bấm Home hoặc TV tắt màn hình thì tự dừng tiếng
 - **Tự cập nhật**: playlist tải lại sau mỗi 3 giờ, EPG sau mỗi 6 giờ (kể cả khi box mở nhiều ngày liền);
   mở app là hiện ngay dữ liệu đã lưu rồi cập nhật ngầm; bấm *Làm mới* để cập nhật tay
 - Mở app là vào thẳng kênh xem gần nhất; tự thử lại khi mất luồng
-- Lưu cache playlist và EPG nên lần sau mở app có kênh và lịch ngay
+- Lưu cache playlist và EPG nên lần sau mở app có kênh và lịch ngay (ghi qua file tạm, không bao giờ ghi dở)
+- Bấm *Làm mới* liên tục không tạo nhiều lượt tải chồng nhau; kênh trùng hoàn toàn (cùng nhóm + cùng link) chỉ giữ 1
 
 ## Cách build
 1. Cài **Android Studio** bản Koala (2024.1) trở lên, mở thư mục `MyTivi`.

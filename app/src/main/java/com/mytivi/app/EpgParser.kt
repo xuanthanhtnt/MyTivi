@@ -53,8 +53,8 @@ object EpgParser {
             }
             event = parser.next()
         }
-        map.values.forEach { list -> list.sortBy { it.start } }
-        return map
+        // Sắp theo giờ và bỏ bản ghi trùng (một số nguồn EPG lặp lại chương trình)
+        return map.mapValues { (_, list) -> list.sortedBy { it.start }.distinctBy { it.start } }
     }
 }
 

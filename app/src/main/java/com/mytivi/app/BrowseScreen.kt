@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -59,6 +60,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -97,7 +99,6 @@ fun BrowseScreen(
     onSettings: () -> Unit,
 ) {
     val context = LocalContext.current
-    val density = LocalDensity.current
     val channels = vm.channels
     val favorites = vm.favorites
     val epg = vm.epg
@@ -122,7 +123,8 @@ fun BrowseScreen(
     }
 
     // ---- Cửa sổ thời gian của bảng lịch ----
-    val windowStart = remember { floorTo(System.currentTimeMillis(), HALF_HOUR) }
+    // Mốc đầu bảng lịch tự dời theo mỗi nửa giờ (box mở cả ngày vẫn đúng giờ)
+    val windowStart = remember(now / HALF_HOUR) { floorTo(now, HALF_HOUR) }
     val windowEnd = windowStart + GUIDE_HOURS * HOUR
     val scroll = rememberScrollState()          // dùng chung: kéo ngang là mọi hàng cùng trượt
     val listState = rememberLazyListState()
@@ -214,26 +216,9 @@ fun BrowseScreen(
                 channel = focusedChannel,
                 number = focusedNumber,
                 prog = focusedProg,
-                epg = epg,
                 now = now,
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
-            Spacer(Modifier.width(16.dp))
-            Column(Modifier.width(210.dp).fillMaxHeight()) {
-                MenuButton("Nhóm: ${labels.getOrElse(sel) { "Tất cả" }}") { showDrawer = true }
-                MenuButton("Làm mới") { vm.refresh() }
-                MenuButton("Cài đặt", onSettings)
-                Spacer(Modifier.weight(1f))
-                if (vm.loading) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Text("  Đang tải…", color = Dim, fontSize = 13.sp)
-                    }
-                }
-                val updated = if (vm.lastUpdated > 0) " · cập nhật ${hhmm(vm.lastUpdated)}" else ""
-                Text("${channels.size} kênh$updated", color = Dim, fontSize = 13.sp, maxLines = 1)
-                vm.error?.let { Text(it, color = ErrorRed, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
-            }
         }
         Spacer(Modifier.height(10.dp))
 
@@ -244,7 +229,8 @@ fun BrowseScreen(
         // ===== Bảng kênh + chương trình =====
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                itemsIndexed(shown) { i, ch ->
+                // Khóa ổn định theo kênh: làm mới danh sách không làm hàng cũ bị vẽ lặp
+                itemsIndexed(shown, key = { _, ch -> ch.group + "\u0000" + ch.url }) { i, ch ->
                     GuideRow(
                         number = i + 1,
                         ch = ch,
@@ -277,17 +263,6 @@ fun BrowseScreen(
                     modifier = Modifier.padding(24.dp),
                 )
             }
-            // Vạch "bây giờ"
-            val nowPx = with(density) { (((now - windowStart) / 60_000f) * DP_PER_MIN).dp.toPx() }
-            Box(Modifier.padding(start = LEFT_W).fillMaxSize().clipToBounds()) {
-                Box(
-                    Modifier
-                        .offset { IntOffset((nowPx - scroll.value).roundToInt(), 0) }
-                        .fillMaxHeight()
-                        .width(2.dp)
-                        .background(Color.White.copy(alpha = 0.85f)),
-                )
-            }
         }
     }
 
@@ -297,13 +272,19 @@ fun BrowseScreen(
         enter = slideInHorizontally { -it } + fadeIn(),
         exit = slideOutHorizontally { -it } + fadeOut(),
     ) {
+        val updated = if (vm.lastUpdated > 0) " · cập nhật ${hhmm(vm.lastUpdated)}" else ""
         GroupDrawer(
             labels = labels,
             counts = counts,
             selected = sel,
             query = query,
+            status = "${channels.size} kênh$updated",
+            loading = vm.loading,
+            error = vm.error,
             onQuery = { query = it },
             onHover = { sel = it },
+            onRefresh = { vm.refresh() },
+            onSettings = onSettings,
             onClose = {
                 showDrawer = false
                 focusTick++
@@ -354,7 +335,6 @@ private fun InfoPanel(
     channel: Channel?,
     number: Int,
     prog: Programme?,
-    epg: Map<String, List<Programme>>,
     now: Long,
     modifier: Modifier = Modifier,
 ) {
@@ -368,41 +348,39 @@ private fun InfoPanel(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
             if (prog != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("${hhmm(prog.start)} – ${hhmm(prog.stop)}")
+                    Text("${hhmm(prog.start)} – ${hhmm(prog.stop)}", maxLines = 1, softWrap = false)
                     if (now >= prog.start && now < prog.stop) {
                         LinearProgressIndicator(
                             progress = { progressOf(prog, now) },
-                            modifier = Modifier.padding(horizontal = 14.dp).width(120.dp),
+                            modifier = Modifier.padding(horizontal = 14.dp).width(140.dp),
                         )
-                        Text("còn ${(prog.stop - now + 59_999) / 60_000} phút", color = Dim)
+                        Text(
+                            "còn ${(prog.stop - now + 59_999) / 60_000} phút",
+                            color = Dim,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
                     }
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
             }
             Text(
-                "$number. ${channel.name}  ·  ${channel.group}",
+                "$number. ${channel.name}",
                 color = Dim,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            val next = if (prog != null && channel.id.isNotBlank()) {
-                epg[channel.id.lowercase()]?.firstOrNull { it.start >= prog.stop }
-            } else null
-            if (next != null) {
-                Text(
-                    "Tiếp theo: ${hhmm(next.start)}  ${next.title}",
-                    color = Dim,
-                    fontSize = 14.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
             Spacer(Modifier.weight(1f))
-            Text("OK: toàn màn hình   ◄: nhóm kênh   ☆: yêu thích", color = Dim, fontSize = 13.sp)
+            Text(
+                "OK: toàn màn hình   ◄: nhóm kênh, làm mới, cài đặt",
+                color = Dim,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -427,10 +405,15 @@ private fun MenuButton(label: String, onClick: () -> Unit) {
 
 @Composable
 private fun TimelineHeader(now: Long, windowStart: Long, scroll: ScrollState) {
+    val density = LocalDensity.current
     val dateText = remember(now / 60_000) {
         SimpleDateFormat("EEE, dd/MM  HH:mm", Locale.getDefault()).format(Date(now))
     }
-    Row(Modifier.fillMaxWidth().height(34.dp), verticalAlignment = Alignment.CenterVertically) {
+    val arrowW = 14.dp
+    val nowPx = with(density) { (((now - windowStart) / 60_000f) * DP_PER_MIN).dp.toPx() }
+    val halfArrowPx = with(density) { (arrowW / 2).toPx() }
+
+    Row(Modifier.fillMaxWidth().height(38.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
             dateText,
             color = Dim,
@@ -438,14 +421,31 @@ private fun TimelineHeader(now: Long, windowStart: Long, scroll: ScrollState) {
             maxLines = 1,
             modifier = Modifier.width(LEFT_W).padding(start = 8.dp),
         )
-        Row(Modifier.weight(1f).horizontalScroll(scroll, enabled = false)) {
-            repeat(GUIDE_HOURS * 2) { n ->
-                Text(
-                    hhmm(windowStart + n * HALF_HOUR),
-                    fontSize = 15.sp,
-                    maxLines = 1,
-                    modifier = Modifier.width((30 * DP_PER_MIN).dp).padding(start = 6.dp),
-                )
+        Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
+            Row(Modifier.fillMaxSize().horizontalScroll(scroll, enabled = false)) {
+                repeat(GUIDE_HOURS * 2) { n ->
+                    Text(
+                        hhmm(windowStart + n * HALF_HOUR),
+                        fontSize = 15.sp,
+                        maxLines = 1,
+                        modifier = Modifier.width((30 * DP_PER_MIN).dp).padding(start = 6.dp, top = 3.dp),
+                    )
+                }
+            }
+            // Mũi tên tam giác chỉ xuống vị trí "bây giờ", trượt cùng thanh thời gian
+            Canvas(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .offset { IntOffset((nowPx - scroll.value - halfArrowPx).roundToInt(), 0) }
+                    .size(arrowW, 8.dp),
+            ) {
+                val path = Path().apply {
+                    moveTo(0f, 0f)
+                    lineTo(size.width, 0f)
+                    lineTo(size.width / 2f, size.height)
+                    close()
+                }
+                drawPath(path, Accent)
             }
         }
     }
@@ -564,8 +564,13 @@ private fun GroupDrawer(
     counts: List<Int>,
     selected: Int,
     query: String,
+    status: String,
+    loading: Boolean,
+    error: String?,
     onQuery: (String) -> Unit,
     onHover: (Int) -> Unit,
+    onRefresh: () -> Unit,
+    onSettings: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -593,7 +598,7 @@ private fun GroupDrawer(
     ) {
         Text("Nhóm kênh", style = MaterialTheme.typography.titleLarge)
         Text(
-            "Bấm ► hoặc OK để quay lại danh sách kênh",
+            "Bấm ► để quay lại danh sách kênh",
             color = Dim,
             fontSize = 12.sp,
             modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
@@ -606,7 +611,7 @@ private fun GroupDrawer(
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(8.dp))
-        LazyColumn(state = state, modifier = Modifier.fillMaxSize()) {
+        LazyColumn(state = state, modifier = Modifier.weight(1f).fillMaxWidth()) {
             itemsIndexed(labels) { i, label ->
                 Row(
                     Modifier
@@ -628,6 +633,31 @@ private fun GroupDrawer(
                     Text("${counts.getOrElse(i) { 0 }}", color = Dim, fontSize = 13.sp)
                 }
             }
+        }
+
+        // ===== Khu vực dưới cùng: Làm mới, Cài đặt, trạng thái =====
+        Spacer(Modifier.height(8.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x33FFFFFF)))
+        Spacer(Modifier.height(8.dp))
+        MenuButton(if (loading) "Đang làm mới…" else "Làm mới", onRefresh)
+        MenuButton("Cài đặt", onSettings)
+        Spacer(Modifier.height(4.dp))
+        if (loading) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 14.dp)) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                Text("  Đang tải…", color = Dim, fontSize = 12.sp)
+            }
+        }
+        Text(status, color = Dim, fontSize = 12.sp, maxLines = 1, modifier = Modifier.padding(start = 14.dp, top = 2.dp))
+        error?.let {
+            Text(
+                it,
+                color = ErrorRed,
+                fontSize = 12.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 14.dp, top = 2.dp),
+            )
         }
     }
 }

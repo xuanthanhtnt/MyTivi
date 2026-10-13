@@ -11,6 +11,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -61,14 +62,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     loadEpg(cacheOnly = true)
                 }
-                refresh(forceEpg = false)
+                startRefresh(forceEpg = false)
             }
             // Vòng lặp tự cập nhật: box để mở nhiều ngày vẫn luôn có dữ liệu mới
             while (true) {
                 delay(CHECK_EVERY_MS)
                 if (prefs.playlistUrl.isBlank()) continue
                 if (System.currentTimeMillis() - prefs.playlistTime > PLAYLIST_TTL_MS) {
-                    refresh(forceEpg = false)
+                    startRefresh(forceEpg = false)
                 } else if (epgStale()) {
                     loadEpg()
                 }
@@ -81,11 +82,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         prefs.epgUrl = epgUrl
         channels = emptyList()
         epg = emptyMap()
-        refresh(forceEpg = true)
+        startRefresh(forceEpg = true)
     }
 
-    /** forceEpg = true: bấm "Làm mới" thì tải lại cả EPG; tự động thì chỉ tải khi EPG đã cũ. */
-    fun refresh(forceEpg: Boolean = true) {
+    /**
+     * Nút "Làm mới": tải lại playlist và EPG.
+     * Nếu đang tải dở thì bỏ qua (bấm OK 2 lần liên tiếp không tạo 2 lượt tải chạy song song).
+     */
+    fun refresh() {
+        if (refreshJob?.isActive == true) return
+        startRefresh(forceEpg = true)
+    }
+
+    /** forceEpg = true: tải lại cả EPG; tự động thì chỉ tải EPG khi đã cũ. */
+    private fun startRefresh(forceEpg: Boolean) {
         val url = prefs.playlistUrl
         if (url.isBlank()) return
         val gen = ++generation
@@ -96,7 +106,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val parsed = withContext(Dispatchers.IO) {
                     val text = Http.getString(url)
-                    cacheFile.writeText(text)
+                    ensureActive()                 // lượt này đã bị hủy thì không ghi đè cache
+                    writeAtomic(cacheFile, text)
                     parseText(text, url)
                 }
                 channels = parsed.channels
@@ -138,9 +149,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 epg = withContext(Dispatchers.IO) {
                     if (!cacheOnly && (force || epgStale())) {
                         try {
-                            val tmp = File(epgFile.path + ".tmp")
-                            Http.download(url, tmp)
-                            tmp.renameTo(epgFile)
+                            // Mỗi lượt tải dùng file tạm riêng, xong mới thay file chính
+                            val tmp = File.createTempFile("epg", ".part", epgFile.parentFile)
+                            try {
+                                Http.download(url, tmp)
+                                ensureActive()
+                                if (!tmp.renameTo(epgFile)) {
+                                    tmp.copyTo(epgFile, overwrite = true)
+                                }
+                            } finally {
+                                tmp.delete()
+                            }
                             prefs.epgSource = url
                             prefs.epgTime = System.currentTimeMillis()
                         } catch (e: CancellationException) {
@@ -166,12 +185,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         prefs.favorites = updated
     }
 
-    /** Nếu link là một luồng HLS đơn (không phải danh sách kênh) thì coi như 1 kênh. */
+    /** Ghi file qua file tạm rồi đổi tên, để file cache không bao giờ bị ghi dở hoặc ghi chồng. */
+    private fun writeAtomic(file: File, text: String) {
+        val tmp = File.createTempFile("playlist", ".part", file.parentFile)
+        try {
+            tmp.writeText(text)
+            if (!tmp.renameTo(file)) tmp.copyTo(file, overwrite = true)
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    /**
+     * Nếu link là một luồng HLS đơn (không phải danh sách kênh) thì coi như 1 kênh.
+     * Kênh trùng hoàn toàn (cùng nhóm + cùng link) chỉ giữ 1.
+     */
     private fun parseText(text: String, url: String): ParsedPlaylist {
         val parsed = M3uParser.parse(text)
         if (parsed.channels.isEmpty() && text.contains("#EXT-X-")) {
             return ParsedPlaylist(listOf(Channel("", "Luồng trực tiếp", url, "", "Khác")), null)
         }
-        return parsed
+        return parsed.copy(channels = parsed.channels.distinctBy { it.group to it.url })
     }
 }
