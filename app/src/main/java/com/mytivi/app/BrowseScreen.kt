@@ -2,8 +2,17 @@
 
 package com.mytivi.app
 
+import android.view.LayoutInflater
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,11 +22,14 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
@@ -35,13 +47,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -49,12 +72,24 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.roundToInt
 
-/** Màn hình chính: nhóm kênh | danh sách kênh | khung xem trước (giống TiviMate). */
+// ---- Kích thước bảng lịch (chỉnh ở đây nếu muốn) ----
+private val LEFT_W = 330.dp          // cột số kênh + logo + tên
+private val ROW_H = 58.dp            // chiều cao mỗi hàng kênh
+private const val DP_PER_MIN = 6.4f  // 30 phút ≈ 192dp
+private const val GUIDE_HOURS = 12   // bảng lịch hiển thị 12 giờ kể từ bây giờ
+
+/**
+ * Màn hình chính kiểu TiviMate: khung xem trước + thông tin chương trình ở trên,
+ * thanh thời gian và bảng kênh/chương trình ở dưới.
+ */
 @Composable
 fun BrowseScreen(
     vm: MainViewModel,
@@ -62,6 +97,7 @@ fun BrowseScreen(
     onSettings: () -> Unit,
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val channels = vm.channels
     val favorites = vm.favorites
     val epg = vm.epg
@@ -69,8 +105,13 @@ fun BrowseScreen(
 
     var sel by remember { mutableIntStateOf(1) }          // 0 = Yêu thích, 1 = Tất cả, 2.. = nhóm
     var query by remember { mutableStateOf("") }
+    var showDrawer by remember { mutableStateOf(false) }
     val groups = remember(channels) { channels.map { it.group }.distinct() }
     val labels = remember(groups) { listOf("★ Yêu thích", "Tất cả") + groups }
+    val counts = remember(channels, favorites, groups) {
+        val byGroup = channels.groupingBy { it.group }.eachCount()
+        listOf(channels.count { it.url in favorites }, channels.size) + groups.map { byGroup[it] ?: 0 }
+    }
     val shown = remember(channels, favorites, groups, sel, query) {
         val base = when (sel) {
             0 -> channels.filter { it.url in favorites }
@@ -80,18 +121,28 @@ fun BrowseScreen(
         if (query.isBlank()) base else base.filter { it.name.contains(query, ignoreCase = true) }
     }
 
-    // ---- Xem trước: phát im lặng, độ phân giải thấp, kênh nào đang được chọn ----
-    var previewChannel by remember { mutableStateOf<Channel?>(null) }
+    // ---- Cửa sổ thời gian của bảng lịch ----
+    val windowStart = remember { floorTo(System.currentTimeMillis(), HALF_HOUR) }
+    val windowEnd = windowStart + GUIDE_HOURS * HOUR
+    val scroll = rememberScrollState()          // dùng chung: kéo ngang là mọi hàng cùng trượt
+    val listState = rememberLazyListState()
+
+    // ---- Kênh / chương trình đang được chọn ----
+    var focusedChannel by remember { mutableStateOf<Channel?>(null) }
+    var focusedNumber by remember { mutableIntStateOf(0) }
+    var focusedProg by remember { mutableStateOf<Programme?>(null) }
+
+    // ---- Xem trước: có tiếng, độ phân giải thấp cho nhẹ ----
     var previewLoading by remember { mutableStateOf(false) }
     var previewError by remember { mutableStateOf(false) }
     val previewPlayer = remember {
         buildPlayer(context).apply {
-            volume = 0f
             trackSelectionParameters = trackSelectionParameters.buildUpon()
-                .setMaxVideoSize(854, 480)    // nhẹ cho box yếu, kênh HLS sẽ tự chọn luồng thấp
+                .setMaxVideoSize(854, 480)
                 .build()
         }
     }
+    PauseWhenBackground(previewPlayer)
     DisposableEffect(previewPlayer) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -105,220 +156,478 @@ fun BrowseScreen(
         previewPlayer.addListener(listener)
         onDispose {
             previewPlayer.removeListener(listener)
-            previewPlayer.release()      // vào xem toàn màn hình là giải phóng ngay
+            previewPlayer.release()
         }
     }
-    LaunchedEffect(previewChannel?.url) {
-        val ch = previewChannel ?: return@LaunchedEffect
+    LaunchedEffect(focusedChannel?.url) {
+        val ch = focusedChannel ?: return@LaunchedEffect
         previewError = false
         previewPlayer.stop()
         previewPlayer.clearMediaItems()
-        delay(700)                        // lướt nhanh qua nhiều kênh thì không tải từng kênh
+        delay(700)                       // lướt nhanh thì không tải từng kênh
         previewPlayer.setMediaItem(MediaItem.fromUri(ch.url))
         previewPlayer.prepare()
         previewPlayer.play()
     }
 
-    val firstFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
+    // ---- Đặt focus vào kênh xem gần nhất (hoặc kênh đầu tiên) ----
+    val rowFocus = remember { FocusRequester() }
+    var focusIndex by remember { mutableIntStateOf(-1) }
+    var focusTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(focusTick, channels.isNotEmpty()) {
+        if (shown.isEmpty() || showDrawer) return@LaunchedEffect
+        val current = focusedChannel?.url
+        var idx = shown.indexOfFirst { it.url == current }
+        if (idx < 0) idx = shown.indexOfFirst { it.url == vm.lastChannelUrl }
+        if (idx < 0) idx = 0
+        focusIndex = idx
+        listState.scrollToItem(idx)
         withFrameNanos { }
-        runCatching { firstFocus.requestFocus() }
+        withFrameNanos { }
+        runCatching { rowFocus.requestFocus() }
     }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 20.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("MyTivi", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            val updated = if (vm.lastUpdated > 0) " · cập nhật ${hhmm(vm.lastUpdated)}" else ""
-            Text("   ${channels.size} kênh$updated", color = Dim)
-            Spacer(Modifier.weight(1f))
-            if (vm.loading) CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
-            TvButton("Làm mới") { vm.refresh() }
-            TvButton("Cài đặt", onSettings)
-        }
-        vm.error?.let { Text(it, color = ErrorRed) }
-        Spacer(Modifier.height(12.dp))
+    // Bấm Back khi đang mở ngăn nhóm kênh thì đóng ngăn (không thoát app)
+    BackHandler(enabled = showDrawer) {
+        showDrawer = false
+        focusTick++
+    }
 
-        Row(Modifier.fillMaxWidth().weight(1f)) {
-            LazyColumn(Modifier.width(240.dp).fillMaxHeight()) {
-                itemsIndexed(labels) { i, label ->
-                    GroupItem(
-                        label = label,
-                        selected = i == sel,
-                        modifier = if (i == 1) Modifier.focusRequester(firstFocus) else Modifier,
-                    ) { sel = i }
-                }
-            }
-            Spacer(Modifier.width(16.dp))
-            Column(Modifier.weight(1f)) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = { Text("Tìm kênh…") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                if (shown.isEmpty() && !vm.loading) {
-                    Text(
-                        if (sel == 0) "Chưa có kênh yêu thích. Bấm ☆ bên phải kênh để thêm." else "Không có kênh nào.",
-                        color = Dim,
-                        modifier = Modifier.padding(16.dp),
-                    )
-                }
-                LazyColumn(Modifier.fillMaxSize()) {
-                    itemsIndexed(shown) { i, ch ->
-                        ChannelRow(
-                            number = i + 1,
-                            ch = ch,
-                            favorite = ch.url in favorites,
-                            now = now,
-                            programme = nowPlaying(epg, ch, now),
-                            onFocus = { previewChannel = ch },
-                            onPlay = { onPlay(shown, i) },
-                            onFavorite = { vm.toggleFavorite(ch) },
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.width(20.dp))
-            PreviewPanel(
+    Box(Modifier.fillMaxSize()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 32.dp, vertical = 16.dp)
+            .focusProperties { canFocus = !showDrawer },   // mở ngăn nhóm thì phần chính không nhận focus
+    ) {
+        // ===== Phần trên: xem trước | thông tin | nút chức năng =====
+        Row(Modifier.fillMaxWidth().height(205.dp)) {
+            PreviewBox(
                 exo = previewPlayer,
-                channel = previewChannel,
+                hasChannel = focusedChannel != null,
                 loading = previewLoading,
                 error = previewError,
+                modifier = Modifier.width(364.dp),
+            )
+            Spacer(Modifier.width(24.dp))
+            InfoPanel(
+                channel = focusedChannel,
+                number = focusedNumber,
+                prog = focusedProg,
                 epg = epg,
                 now = now,
-                modifier = Modifier.width(380.dp),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
             )
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.width(210.dp).fillMaxHeight()) {
+                MenuButton("Nhóm: ${labels.getOrElse(sel) { "Tất cả" }}") { showDrawer = true }
+                MenuButton("Làm mới") { vm.refresh() }
+                MenuButton("Cài đặt", onSettings)
+                Spacer(Modifier.weight(1f))
+                if (vm.loading) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text("  Đang tải…", color = Dim, fontSize = 13.sp)
+                    }
+                }
+                val updated = if (vm.lastUpdated > 0) " · cập nhật ${hhmm(vm.lastUpdated)}" else ""
+                Text("${channels.size} kênh$updated", color = Dim, fontSize = 13.sp, maxLines = 1)
+                vm.error?.let { Text(it, color = ErrorRed, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+            }
         }
+        Spacer(Modifier.height(10.dp))
+
+        // ===== Thanh thời gian =====
+        TimelineHeader(now = now, windowStart = windowStart, scroll = scroll)
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x33FFFFFF)))
+
+        // ===== Bảng kênh + chương trình =====
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                itemsIndexed(shown) { i, ch ->
+                    GuideRow(
+                        number = i + 1,
+                        ch = ch,
+                        favorite = ch.url in favorites,
+                        programmes = if (ch.id.isBlank()) null else epg[ch.id.lowercase()],
+                        windowStart = windowStart,
+                        windowEnd = windowEnd,
+                        now = now,
+                        scroll = scroll,
+                        headerRequester = if (i == focusIndex) rowFocus else null,
+                        onFocusRow = { prog ->
+                            focusedChannel = ch
+                            focusedNumber = i + 1
+                            focusedProg = prog
+                        },
+                        onPlay = { onPlay(shown, i) },
+                        onFavorite = { vm.toggleFavorite(ch) },
+                        onOpenGroups = { showDrawer = true },
+                    )
+                }
+            }
+            if (shown.isEmpty()) {
+                Text(
+                    when {
+                        sel == 0 -> "Chưa có kênh yêu thích. Bấm ☆ cạnh tên kênh để thêm."
+                        vm.loading -> "Đang tải danh sách kênh…"
+                        else -> "Không có kênh nào."
+                    },
+                    color = Dim,
+                    modifier = Modifier.padding(24.dp),
+                )
+            }
+            // Vạch "bây giờ"
+            val nowPx = with(density) { (((now - windowStart) / 60_000f) * DP_PER_MIN).dp.toPx() }
+            Box(Modifier.padding(start = LEFT_W).fillMaxSize().clipToBounds()) {
+                Box(
+                    Modifier
+                        .offset { IntOffset((nowPx - scroll.value).roundToInt(), 0) }
+                        .fillMaxHeight()
+                        .width(2.dp)
+                        .background(Color.White.copy(alpha = 0.85f)),
+                )
+            }
+        }
+    }
+
+    AnimatedVisibility(
+        visible = showDrawer,
+        modifier = Modifier.align(Alignment.CenterStart),
+        enter = slideInHorizontally { -it } + fadeIn(),
+        exit = slideOutHorizontally { -it } + fadeOut(),
+    ) {
+        GroupDrawer(
+            labels = labels,
+            counts = counts,
+            selected = sel,
+            query = query,
+            onQuery = { query = it },
+            onHover = { sel = it },
+            onClose = {
+                showDrawer = false
+                focusTick++
+            },
+        )
+    }
+    }   // hết Box
+}
+
+// ============================ Khung xem trước & thông tin ============================
+
+@Composable
+private fun PreviewBox(
+    exo: androidx.media3.exoplayer.ExoPlayer,
+    hasChannel: Boolean,
+    loading: Boolean,
+    error: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val shape = RoundedCornerShape(20.dp)
+    Box(modifier.aspectRatio(16f / 9f).clip(shape).background(Color.Black)) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                // Dùng TextureView (khai báo trong layout) để video bị cắt theo góc bo
+                (LayoutInflater.from(ctx).inflate(R.layout.preview_player_view, null) as PlayerView).apply {
+                    isFocusable = false
+                    this.player = exo
+                }
+            },
+        )
+        when {
+            !hasChannel -> Text("Chọn một kênh để xem trước", color = Dim, modifier = Modifier.align(Alignment.Center))
+            error -> Text("Không xem trước được kênh này", color = ErrorRed, modifier = Modifier.align(Alignment.Center))
+            loading -> CircularProgressIndicator(
+                modifier = Modifier.align(Alignment.Center).size(28.dp),
+                strokeWidth = 3.dp,
+            )
+            else -> Unit
+        }
+        // Viền mảnh phủ lên trên video cho gọn mắt
+        Box(Modifier.fillMaxSize().border(1.dp, Color(0x40FFFFFF), shape))
     }
 }
 
 @Composable
-private fun PreviewPanel(
-    exo: ExoPlayer,
+private fun InfoPanel(
     channel: Channel?,
-    loading: Boolean,
-    error: Boolean,
+    number: Int,
+    prog: Programme?,
     epg: Map<String, List<Programme>>,
     now: Long,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
-        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        useController = false
-                        isFocusable = false
-                        this.player = exo
-                    }
-                },
+        if (channel == null) {
+            Text("Lướt qua danh sách kênh để xem trước.", color = Dim)
+        } else {
+            Text(
+                prog?.title ?: "Không có thông tin",
+                style = MaterialTheme.typography.headlineSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
-            when {
-                channel == null -> Text(
-                    "Chọn một kênh để xem trước",
+            Spacer(Modifier.height(8.dp))
+            if (prog != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("${hhmm(prog.start)} – ${hhmm(prog.stop)}")
+                    if (now >= prog.start && now < prog.stop) {
+                        LinearProgressIndicator(
+                            progress = { progressOf(prog, now) },
+                            modifier = Modifier.padding(horizontal = 14.dp).width(120.dp),
+                        )
+                        Text("còn ${(prog.stop - now + 59_999) / 60_000} phút", color = Dim)
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+            Text(
+                "$number. ${channel.name}  ·  ${channel.group}",
+                color = Dim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val next = if (prog != null && channel.id.isNotBlank()) {
+                epg[channel.id.lowercase()]?.firstOrNull { it.start >= prog.stop }
+            } else null
+            if (next != null) {
+                Text(
+                    "Tiếp theo: ${hhmm(next.start)}  ${next.title}",
                     color = Dim,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-                error -> Text(
-                    "Không xem trước được kênh này",
-                    color = ErrorRed,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-                loading -> CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center).size(28.dp),
-                    strokeWidth = 3.dp,
-                )
-                else -> Unit
-            }
-        }
-        if (channel != null) {
-            Spacer(Modifier.height(10.dp))
-            Text(channel.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
-            val cur = nowPlaying(epg, channel, now)
-            if (cur != null) {
-                Text(cur.title, maxLines = 2, modifier = Modifier.padding(top = 4.dp))
-                LinearProgressIndicator(
-                    progress = { progressOf(cur, now) },
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 4.dp),
                 )
             }
-            nextPlaying(epg, channel, now)?.let {
-                Text("Tiếp theo: ${hhmm(it.start)}  ${it.title}", color = Dim, maxLines = 1, fontSize = 14.sp)
-            }
-            Text("Bấm OK để xem toàn màn hình", color = Dim, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+            Spacer(Modifier.weight(1f))
+            Text("OK: toàn màn hình   ◄: nhóm kênh   ☆: yêu thích", color = Dim, fontSize = 13.sp)
         }
     }
 }
 
-/** Mục nhóm: di chuyển focus tới đâu thì danh sách kênh đổi theo tới đó. */
 @Composable
-fun GroupItem(label: String, selected: Boolean, modifier: Modifier = Modifier, onSelect: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
+private fun MenuButton(label: String, onClick: () -> Unit) {
     Text(
         label,
-        color = if (selected) Accent else Color.White,
-        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+        color = Color.White,
+        fontSize = 16.sp,
         maxLines = 1,
-        modifier = modifier
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .onFocusChanged {
-                focused = it.isFocused
-                if (it.isFocused) onSelect()
-            }
-            .background(if (focused) FocusBg else Color.Transparent, RoundedCornerShape(8.dp))
-            .clickable(onClick = onSelect)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(bottom = 4.dp)
+            .tvFocusable(onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
     )
 }
 
+// ============================ Bảng lịch ============================
+
 @Composable
-fun ChannelRow(
+private fun TimelineHeader(now: Long, windowStart: Long, scroll: ScrollState) {
+    val dateText = remember(now / 60_000) {
+        SimpleDateFormat("EEE, dd/MM  HH:mm", Locale.getDefault()).format(Date(now))
+    }
+    Row(Modifier.fillMaxWidth().height(34.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            dateText,
+            color = Dim,
+            fontSize = 15.sp,
+            maxLines = 1,
+            modifier = Modifier.width(LEFT_W).padding(start = 8.dp),
+        )
+        Row(Modifier.weight(1f).horizontalScroll(scroll, enabled = false)) {
+            repeat(GUIDE_HOURS * 2) { n ->
+                Text(
+                    hhmm(windowStart + n * HALF_HOUR),
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    modifier = Modifier.width((30 * DP_PER_MIN).dp).padding(start = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuideRow(
     number: Int,
     ch: Channel,
     favorite: Boolean,
+    programmes: List<Programme>?,
+    windowStart: Long,
+    windowEnd: Long,
     now: Long,
-    programme: Programme?,
-    onFocus: () -> Unit,
+    scroll: ScrollState,
+    headerRequester: FocusRequester?,
+    onFocusRow: (Programme?) -> Unit,
     onPlay: () -> Unit,
     onFavorite: () -> Unit,
+    onOpenGroups: () -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+    val cells = remember(programmes, windowStart) { buildCells(programmes, windowStart, windowEnd) }
+
+    Row(Modifier.fillMaxWidth().height(ROW_H), verticalAlignment = Alignment.CenterVertically) {
+        // Cột trái: số kênh, logo, tên, ★
         Row(
-            Modifier
-                .weight(1f)
-                .onFocusChanged { if (it.isFocused) onFocus() }   // chọn tới kênh nào thì khung xem trước chạy kênh đó
-                .tvFocusable(onPlay)
-                .padding(10.dp),
+            Modifier.width(LEFT_W).fillMaxHeight().padding(vertical = 1.5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("$number", color = Dim, modifier = Modifier.width(48.dp))
-            AsyncImage(
-                model = ch.logo.ifBlank { null },
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.size(44.dp),
+            Row(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .then(if (headerRequester != null) Modifier.focusRequester(headerRequester) else Modifier)
+                    .onFocusChanged {
+                        if (it.isFocused) onFocusRow(programmes?.firstOrNull { p -> now >= p.start && now < p.stop })
+                    }
+                    .onKeyEvent { e ->
+                        // Bấm Trái khi đã ở cột tên kênh (ngoài cùng bên trái) -> mở ngăn nhóm kênh
+                        if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionLeft) {
+                            onOpenGroups()
+                            true
+                        } else false
+                    }
+                    .tvFocusable(onPlay)
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("$number", color = Dim, fontSize = 16.sp, modifier = Modifier.width(36.dp))
+                AsyncImage(
+                    model = ch.logo.ifBlank { null },
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.size(38.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    ch.name,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                if (favorite) "★" else "☆",
+                color = Gold,
+                fontSize = 22.sp,
+                modifier = Modifier.tvFocusable(onFavorite).padding(horizontal = 10.dp, vertical = 8.dp),
             )
-            Spacer(Modifier.width(14.dp))
-            Column {
-                Text(ch.name, maxLines = 1, fontSize = 18.sp)
-                if (programme != null) {
-                    Text(programme.title, color = Dim, maxLines = 1, fontSize = 14.sp)
-                    LinearProgressIndicator(
-                        progress = { progressOf(programme, now) },
-                        modifier = Modifier.fillMaxWidth(0.6f).padding(top = 4.dp),
+        }
+        // Các ô chương trình (trượt ngang cùng nhau)
+        Row(Modifier.weight(1f).fillMaxHeight().horizontalScroll(scroll)) {
+            cells.forEach { c ->
+                GuideCell(c, now, onFocus = { onFocusRow(c.programme) }, onPlay = onPlay)
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuideCell(cell: Cell, now: Long, onFocus: () -> Unit, onPlay: () -> Unit) {
+    val width = (((cell.end - cell.start) / 60_000f) * DP_PER_MIN).dp
+    val live = now >= cell.start && now < cell.end
+    val base = when {
+        cell.programme == null -> Color(0xFF111B2E)
+        live -> Color(0xFF24406B)
+        else -> Color(0xFF182640)
+    }
+    Box(
+        Modifier
+            .width(width)
+            .fillMaxHeight()
+            .padding(1.5.dp)
+            .background(base, RoundedCornerShape(6.dp))
+            .onFocusChanged { if (it.isFocused) onFocus() }
+            .tvFocusable(onPlay),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            cell.programme?.title ?: "Không có thông tin",
+            color = if (cell.programme == null) Dim else Color.White,
+            fontSize = 15.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 10.dp),
+        )
+    }
+}
+
+// ============================ Ngăn nhóm kênh (trượt từ bên trái) ============================
+
+@Composable
+private fun GroupDrawer(
+    labels: List<String>,
+    counts: List<Int>,
+    selected: Int,
+    query: String,
+    onQuery: (String) -> Unit,
+    onHover: (Int) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val initial = remember { selected }
+    val focusInitial = remember { FocusRequester() }
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = (selected - 3).coerceAtLeast(0))
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        withFrameNanos { }
+        runCatching { focusInitial.requestFocus() }
+    }
+    Column(
+        modifier
+            .width(320.dp)
+            .fillMaxHeight()
+            .background(Color(0xF2091220))
+            .padding(horizontal = 16.dp, vertical = 20.dp)
+            .onKeyEvent { e ->
+                // Bấm Phải ở bất kỳ đâu trong ngăn = quay lại danh sách kênh
+                if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionRight) {
+                    onClose()
+                    true
+                } else false
+            },
+    ) {
+        Text("Nhóm kênh", style = MaterialTheme.typography.titleLarge)
+        Text(
+            "Bấm ► hoặc OK để quay lại danh sách kênh",
+            color = Dim,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
+        )
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQuery,
+            placeholder = { Text("Tìm kênh…") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        LazyColumn(state = state, modifier = Modifier.fillMaxSize()) {
+            itemsIndexed(labels) { i, label ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .then(if (i == initial) Modifier.focusRequester(focusInitial) else Modifier)
+                        .onFocusChanged { if (it.isFocused) onHover(i) }   // di chuyển tới nhóm nào, danh sách kênh đổi theo
+                        .tvFocusable(onClose)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        label,
+                        color = if (i == selected) Accent else Color.White,
+                        fontWeight = if (i == selected) FontWeight.Bold else FontWeight.Normal,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
                     )
+                    Text("${counts.getOrElse(i) { 0 }}", color = Dim, fontSize = 13.sp)
                 }
             }
         }
-        Text(
-            if (favorite) "★" else "☆",
-            color = Gold,
-            fontSize = 24.sp,
-            modifier = Modifier.tvFocusable(onFavorite).padding(horizontal = 16.dp, vertical = 10.dp),
-        )
     }
 }

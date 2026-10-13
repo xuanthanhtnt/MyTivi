@@ -81,6 +81,7 @@ fun PlayerScreen(
     val current = list[index]
 
     val exo = remember { buildPlayer(context) }
+    PauseWhenBackground(exo)
 
     DisposableEffect(exo) {
         val listener = object : Player.Listener {
