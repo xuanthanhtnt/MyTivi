@@ -1,10 +1,14 @@
+@file:OptIn(UnstableApi::class)
+
 package com.mytivi.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -33,20 +38,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 
-/** Màn hình chính: nhóm kênh bên trái, danh sách kênh bên phải (giống TiviMate). */
+/** Màn hình chính: nhóm kênh | danh sách kênh | khung xem trước (giống TiviMate). */
 @Composable
 fun BrowseScreen(
     vm: MainViewModel,
     onPlay: (List<Channel>, Int) -> Unit,
     onSettings: () -> Unit,
 ) {
+    val context = LocalContext.current
     val channels = vm.channels
     val favorites = vm.favorites
     val epg = vm.epg
@@ -65,6 +80,45 @@ fun BrowseScreen(
         if (query.isBlank()) base else base.filter { it.name.contains(query, ignoreCase = true) }
     }
 
+    // ---- Xem trước: phát im lặng, độ phân giải thấp, kênh nào đang được chọn ----
+    var previewChannel by remember { mutableStateOf<Channel?>(null) }
+    var previewLoading by remember { mutableStateOf(false) }
+    var previewError by remember { mutableStateOf(false) }
+    val previewPlayer = remember {
+        buildPlayer(context).apply {
+            volume = 0f
+            trackSelectionParameters = trackSelectionParameters.buildUpon()
+                .setMaxVideoSize(854, 480)    // nhẹ cho box yếu, kênh HLS sẽ tự chọn luồng thấp
+                .build()
+        }
+    }
+    DisposableEffect(previewPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                previewLoading = state == Player.STATE_BUFFERING
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                previewError = true
+            }
+        }
+        previewPlayer.addListener(listener)
+        onDispose {
+            previewPlayer.removeListener(listener)
+            previewPlayer.release()      // vào xem toàn màn hình là giải phóng ngay
+        }
+    }
+    LaunchedEffect(previewChannel?.url) {
+        val ch = previewChannel ?: return@LaunchedEffect
+        previewError = false
+        previewPlayer.stop()
+        previewPlayer.clearMediaItems()
+        delay(700)                        // lướt nhanh qua nhiều kênh thì không tải từng kênh
+        previewPlayer.setMediaItem(MediaItem.fromUri(ch.url))
+        previewPlayer.prepare()
+        previewPlayer.play()
+    }
+
     val firstFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         withFrameNanos { }
@@ -74,7 +128,8 @@ fun BrowseScreen(
     Column(Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("MyTivi", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text("   ${channels.size} kênh", color = Dim)
+            val updated = if (vm.lastUpdated > 0) " · cập nhật ${hhmm(vm.lastUpdated)}" else ""
+            Text("   ${channels.size} kênh$updated", color = Dim)
             Spacer(Modifier.weight(1f))
             if (vm.loading) CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
             TvButton("Làm mới") { vm.refresh() }
@@ -84,7 +139,7 @@ fun BrowseScreen(
         Spacer(Modifier.height(12.dp))
 
         Row(Modifier.fillMaxWidth().weight(1f)) {
-            LazyColumn(Modifier.width(260.dp).fillMaxHeight()) {
+            LazyColumn(Modifier.width(240.dp).fillMaxHeight()) {
                 itemsIndexed(labels) { i, label ->
                     GroupItem(
                         label = label,
@@ -118,12 +173,82 @@ fun BrowseScreen(
                             favorite = ch.url in favorites,
                             now = now,
                             programme = nowPlaying(epg, ch, now),
+                            onFocus = { previewChannel = ch },
                             onPlay = { onPlay(shown, i) },
                             onFavorite = { vm.toggleFavorite(ch) },
                         )
                     }
                 }
             }
+            Spacer(Modifier.width(20.dp))
+            PreviewPanel(
+                exo = previewPlayer,
+                channel = previewChannel,
+                loading = previewLoading,
+                error = previewError,
+                epg = epg,
+                now = now,
+                modifier = Modifier.width(380.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PreviewPanel(
+    exo: ExoPlayer,
+    channel: Channel?,
+    loading: Boolean,
+    error: Boolean,
+    epg: Map<String, List<Programme>>,
+    now: Long,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
+        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        useController = false
+                        isFocusable = false
+                        this.player = exo
+                    }
+                },
+            )
+            when {
+                channel == null -> Text(
+                    "Chọn một kênh để xem trước",
+                    color = Dim,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                error -> Text(
+                    "Không xem trước được kênh này",
+                    color = ErrorRed,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                loading -> CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center).size(28.dp),
+                    strokeWidth = 3.dp,
+                )
+                else -> Unit
+            }
+        }
+        if (channel != null) {
+            Spacer(Modifier.height(10.dp))
+            Text(channel.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+            val cur = nowPlaying(epg, channel, now)
+            if (cur != null) {
+                Text(cur.title, maxLines = 2, modifier = Modifier.padding(top = 4.dp))
+                LinearProgressIndicator(
+                    progress = { progressOf(cur, now) },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                )
+            }
+            nextPlaying(epg, channel, now)?.let {
+                Text("Tiếp theo: ${hhmm(it.start)}  ${it.title}", color = Dim, maxLines = 1, fontSize = 14.sp)
+            }
+            Text("Bấm OK để xem toàn màn hình", color = Dim, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
         }
     }
 }
@@ -157,12 +282,17 @@ fun ChannelRow(
     favorite: Boolean,
     now: Long,
     programme: Programme?,
+    onFocus: () -> Unit,
     onPlay: () -> Unit,
     onFavorite: () -> Unit,
 ) {
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(
-            Modifier.weight(1f).tvFocusable(onPlay).padding(10.dp),
+            Modifier
+                .weight(1f)
+                .onFocusChanged { if (it.isFocused) onFocus() }   // chọn tới kênh nào thì khung xem trước chạy kênh đó
+                .tvFocusable(onPlay)
+                .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("$number", color = Dim, modifier = Modifier.width(48.dp))

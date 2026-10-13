@@ -2,6 +2,7 @@ package com.mytivi.app
 
 import android.app.Application
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -9,13 +10,22 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
+    companion object {
+        // Chỉnh các mốc này nếu muốn cập nhật thưa hoặc dày hơn
+        private const val PLAYLIST_TTL_MS = 3 * 3_600_000L   // tải lại playlist sau 3 giờ
+        private const val EPG_TTL_MS = 6 * 3_600_000L        // tải lại EPG sau 6 giờ
+        private const val CHECK_EVERY_MS = 15 * 60_000L      // cứ 15 phút kiểm tra một lần
+    }
+
     private val prefs = Prefs(app)
     private val cacheFile = File(app.filesDir, "playlist.m3u")
+    private val epgFile = File(app.filesDir, "epg.cache")
     private var refreshJob: Job? = null
     private var epgJob: Job? = null
     private var generation = 0
@@ -30,6 +40,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var error by mutableStateOf<String?>(null)
         private set
+    var lastUpdated by mutableLongStateOf(prefs.playlistTime)
+        private set
 
     val playlistUrl: String get() = prefs.playlistUrl
     val epgUrl: String get() = prefs.epgUrl
@@ -38,17 +50,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         set(value) { prefs.lastChannelUrl = value }
 
     init {
-        if (prefs.playlistUrl.isNotBlank()) {
-            viewModelScope.launch {
-                // 1) Hiện ngay danh sách đã lưu lần trước, 2) rồi cập nhật từ mạng
+        viewModelScope.launch {
+            if (prefs.playlistUrl.isNotBlank()) {
+                // 1) Hiện ngay dữ liệu đã lưu (kênh + EPG), 2) rồi cập nhật từ mạng
                 if (cacheFile.exists()) {
                     runCatching {
                         channels = withContext(Dispatchers.IO) {
                             parseText(cacheFile.readText(), prefs.playlistUrl).channels
                         }
                     }
+                    loadEpg(cacheOnly = true)
                 }
-                refresh()
+                refresh(forceEpg = false)
+            }
+            // Vòng lặp tự cập nhật: box để mở nhiều ngày vẫn luôn có dữ liệu mới
+            while (true) {
+                delay(CHECK_EVERY_MS)
+                if (prefs.playlistUrl.isBlank()) continue
+                if (System.currentTimeMillis() - prefs.playlistTime > PLAYLIST_TTL_MS) {
+                    refresh(forceEpg = false)
+                } else if (epgStale()) {
+                    loadEpg()
+                }
             }
         }
     }
@@ -58,10 +81,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         prefs.epgUrl = epgUrl
         channels = emptyList()
         epg = emptyMap()
-        refresh()
+        refresh(forceEpg = true)
     }
 
-    fun refresh() {
+    /** forceEpg = true: bấm "Làm mới" thì tải lại cả EPG; tự động thì chỉ tải khi EPG đã cũ. */
+    fun refresh(forceEpg: Boolean = true) {
         val url = prefs.playlistUrl
         if (url.isBlank()) return
         val gen = ++generation
@@ -76,8 +100,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     parseText(text, url)
                 }
                 channels = parsed.channels
+                prefs.autoEpgUrl = parsed.epgUrl.orEmpty()
+                prefs.playlistTime = System.currentTimeMillis()
+                lastUpdated = prefs.playlistTime
                 if (parsed.channels.isEmpty()) error = "Playlist không có kênh nào."
-                loadEpg(prefs.epgUrl.ifBlank { parsed.epgUrl.orEmpty() })
+                if (forceEpg || epgStale()) loadEpg(force = forceEpg)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -88,13 +115,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun loadEpg(url: String) {
+    private fun currentEpgUrl(): String = prefs.epgUrl.ifBlank { prefs.autoEpgUrl }
+
+    private fun epgStale(): Boolean =
+        currentEpgUrl().isNotBlank() && (
+            !epgFile.exists() ||
+                prefs.epgSource != currentEpgUrl() ||
+                System.currentTimeMillis() - prefs.epgTime > EPG_TTL_MS
+            )
+
+    /**
+     * EPG được lưu thành file cache nên mở app lần sau có lịch ngay, không phải tải lại.
+     * cacheOnly = true: chỉ đọc file đã lưu (không dùng mạng).
+     */
+    private fun loadEpg(force: Boolean = false, cacheOnly: Boolean = false) {
+        val url = currentEpgUrl()
         if (url.isBlank()) return
+        if (cacheOnly && !epgFile.exists()) return
         epgJob?.cancel()
         epgJob = viewModelScope.launch {
             try {
                 epg = withContext(Dispatchers.IO) {
-                    Http.open(url).use { EpgParser.parse(it, System.currentTimeMillis()) }
+                    if (!cacheOnly && (force || epgStale())) {
+                        try {
+                            val tmp = File(epgFile.path + ".tmp")
+                            Http.download(url, tmp)
+                            tmp.renameTo(epgFile)
+                            prefs.epgSource = url
+                            prefs.epgTime = System.currentTimeMillis()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // Tải lỗi thì dùng tạm file cũ (nếu có), 15 phút sau sẽ thử lại
+                            if (!epgFile.exists()) throw e
+                        }
+                    }
+                    Http.openFile(epgFile).use { EpgParser.parse(it, System.currentTimeMillis()) }
                 }
             } catch (e: CancellationException) {
                 throw e

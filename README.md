@@ -8,8 +8,11 @@ Kotlin + Jetpack Compose + Media3 (ExoPlayer).
 - Nhóm kênh (group-title), logo kênh, tìm kiếm, kênh yêu thích
 - Xem toàn màn hình: ▲▼ / CH+ CH- đổi kênh, OK mở danh sách kênh, MENU thêm/bỏ yêu thích
 - EPG (XMLTV, hỗ trợ .gz): hiện chương trình đang phát + thanh tiến độ + chương trình tiếp theo
+- **Khung xem trước**: lướt tới kênh nào, ô nhỏ bên phải tự chạy kênh đó (im lặng, độ phân giải thấp cho nhẹ)
+- **Tự cập nhật**: playlist tải lại sau mỗi 3 giờ, EPG sau mỗi 6 giờ (kể cả khi box mở nhiều ngày liền);
+  mở app là hiện ngay dữ liệu đã lưu rồi cập nhật ngầm; bấm *Làm mới* để cập nhật tay
 - Mở app là vào thẳng kênh xem gần nhất; tự thử lại khi mất luồng
-- Lưu cache playlist nên lần sau hiện danh sách ngay
+- Lưu cache playlist và EPG nên lần sau mở app có kênh và lịch ngay
 
 ## Cách build
 1. Cài **Android Studio** bản Koala (2024.1) trở lên, mở thư mục `MyTivi`.
@@ -36,9 +39,10 @@ Kotlin + Jetpack Compose + Media3 (ExoPlayer).
 |---|---|
 | `M3uParser.kt` | Đọc #EXTINF (tvg-id, tvg-logo, group-title...) |
 | `EpgParser.kt` | Đọc XMLTV, chỉ giữ -2h..+24h |
-| `Http.kt` | Tải playlist/EPG bằng OkHttp, tự giải nén gzip |
+| `Http.kt` | Tải playlist/EPG bằng OkHttp, lưu file cache, tự giải nén gzip |
 | `MainViewModel.kt` | Trạng thái: kênh, yêu thích, EPG, cache |
 | `BrowseScreen.kt` | Màn hình nhóm + danh sách kênh |
+| `PlayerFactory.kt` | Tạo ExoPlayer dùng chung (xem trước + toàn màn hình) |
 | `PlayerScreen.kt` | Trình phát ExoPlayer, thanh thông tin, bảng chọn kênh |
 | `SetupScreen.kt` | Nhập link playlist / EPG |
 
@@ -48,3 +52,10 @@ Kotlin + Jetpack Compose + Media3 (ExoPlayer).
 - Link kiểu `url|User-Agent=...` (header riêng) chưa được hỗ trợ.
 
 Chỉ dùng với nội dung bạn có quyền xem.
+
+## Đổi tần suất tự cập nhật
+Trong `MainViewModel.kt`, đầu file có 3 hằng số `PLAYLIST_TTL_MS`, `EPG_TTL_MS`, `CHECK_EVERY_MS`.
+
+## Logo
+Icon app: `app/src/main/res/drawable/ic_launcher.xml` (vector). Banner trên màn hình Android TV:
+`app/src/main/res/drawable-xhdpi/tv_banner.png` (640x360). Có thể xóa file cũ `drawable/banner.xml` nếu còn.

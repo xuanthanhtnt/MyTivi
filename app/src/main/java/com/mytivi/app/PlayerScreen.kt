@@ -48,9 +48,6 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
@@ -83,17 +80,7 @@ fun PlayerScreen(
     val rootFocus = remember { FocusRequester() }
     val current = list[index]
 
-    val exo = remember {
-        val http = DefaultHttpDataSource.Factory()
-            .setUserAgent("MyTivi/1.0")
-            .setAllowCrossProtocolRedirects(true)   // nhiều server IPTV redirect http -> https
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(15_000)
-        ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(http))
-            .build()
-            .apply { playWhenReady = true }
-    }
+    val exo = remember { buildPlayer(context) }
 
     DisposableEffect(exo) {
         val listener = object : Player.Listener {
