@@ -22,6 +22,11 @@ Kotlin + Jetpack Compose + Media3 (ExoPlayer).
 - Lưu cache playlist và EPG nên lần sau mở app có kênh và lịch ngay (ghi qua file tạm, không bao giờ ghi dở)
 - Bấm *Làm mới* liên tục không tạo nhiều lượt tải chồng nhau; kênh trùng hoàn toàn (cùng nhóm + cùng link) chỉ giữ 1
 
+## Thanh thông tin khi xem kênh
+- Vào kênh hoặc đổi kênh: thanh thông tin hiện ở cạnh dưới khoảng 5 giây rồi mờ dần (bấm INFO trên remote để hiện lại).
+- Gồm: số kênh, logo, tên kênh, chương trình đang phát + tiến độ, chương trình tiếp theo, đồng hồ và
+  thông số luồng: chất lượng (SD/HD/FHD/4K), độ phân giải, fps, codec hình (H.264/H.265…), âm thanh (AAC 2.0, AC3 5.1…), bitrate.
+
 ## Cách build
 1. Cài **Android Studio** bản Koala (2024.1) trở lên, mở thư mục `MyTivi`.
 2. Đợi Gradle sync (cần Internet, Android SDK 34 – Studio sẽ tự đề nghị cài).
@@ -54,7 +59,8 @@ Kotlin + Jetpack Compose + Media3 (ExoPlayer).
 | `Updater.kt`, `UpdateViewModel.kt`, `UpdateDialog.kt` | Kiểm tra, tải và cài bản cập nhật từ GitHub Releases |
 | `PlayerFactory.kt` | Tạo ExoPlayer dùng chung (xem trước + toàn màn hình) |
 | `PlayerScreen.kt` | Trình phát ExoPlayer, thanh thông tin, bảng chọn kênh |
-| `SetupScreen.kt` | Nhập link playlist / EPG |
+| `StreamInfo.kt` | Đọc thông số luồng (độ phân giải, fps, codec, bitrate) cho thanh thông tin |
+| `SetupScreen.kt` | Nhập link playlist / EPG, xem phiên bản, kiểm tra cập nhật |
 
 ## Hạn chế hiện tại / việc nên làm tiếp
 - EPG ghép theo `tvg-id`; kênh không có tvg-id sẽ không hiện lịch.

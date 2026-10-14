@@ -3,6 +3,7 @@
 package com.mytivi.app
 
 import android.view.LayoutInflater
+import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -55,6 +56,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -229,7 +231,15 @@ fun BrowseScreen(
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x33FFFFFF)))
 
         // ===== Bảng kênh + chương trình =====
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .onPreviewKeyEvent { e ->
+                    // Đang ở hàng kênh đầu tiên mà bấm ▲: đứng yên, không cho focus chạy lên khung xem trước
+                    e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp && focusedNumber <= 1
+                },
+        ) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 // Khóa ổn định theo kênh: làm mới danh sách không làm hàng cũ bị vẽ lặp
                 itemsIndexed(shown, key = { _, ch -> ch.group + "\u0000" + ch.url }) { i, ch ->
@@ -318,11 +328,15 @@ private fun PreviewBox(
     val shape = RoundedCornerShape(20.dp)
     Box(modifier.aspectRatio(16f / 9f).clip(shape).background(Color.Black)) {
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            // Khung xem trước KHÔNG được nhận focus: nếu focus lọt vào video thì
+            // phím điều hướng và OK bị "nuốt", chỉ còn Back hoạt động
+            modifier = Modifier.fillMaxSize().focusProperties { canFocus = false },
             factory = { ctx ->
                 // Dùng TextureView (khai báo trong layout) để video bị cắt theo góc bo
                 (LayoutInflater.from(ctx).inflate(R.layout.preview_player_view, null) as PlayerView).apply {
                     isFocusable = false
+                    isFocusableInTouchMode = false
+                    descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
                     this.player = exo
                 }
             },

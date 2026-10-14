@@ -2,7 +2,14 @@
 
 package com.mytivi.app
 
+import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
@@ -34,7 +41,9 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -42,7 +51,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -51,12 +63,17 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Xem kênh toàn màn hình.
  *  ▲ / CH+  : kênh kế tiếp        ▼ / CH-  : kênh trước đó
  *  OK / ◄ ► : mở danh sách kênh   MENU     : thêm/bỏ yêu thích
+ *  INFO     : hiện lại thanh thông tin
  *  BACK     : đóng danh sách, hoặc quay về màn hình chính
+ * Thanh thông tin (kênh, chương trình, thông số video) tự hiện vài giây khi vào kênh rồi ẩn.
  */
 @Composable
 fun PlayerScreen(
@@ -119,10 +136,17 @@ fun PlayerScreen(
         }
     }
 
+    // Thông số video/âm thanh của kênh đang xem (xóa khi đổi kênh)
+    val streamInfo = rememberStreamInfo(exo, current.url)
+
     LaunchedEffect(index, infoTick) {
         showInfo = true
-        delay(4_000)
+        delay(5_000)
         showInfo = false
+    }
+    // Khi đọc được thông số luồng (thường sau 1-2 giây) thì hiện lại thanh thông tin cho đủ thời gian xem
+    LaunchedEffect(streamInfo != null) {
+        if (streamInfo != null) infoTick++
     }
 
     BackHandler { if (showList) showList = false else onClose() }
@@ -144,6 +168,7 @@ fun PlayerScreen(
                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter,
                     Key.DirectionLeft, Key.DirectionRight -> { showList = true; true }
                     Key.Menu -> { onToggleFavorite(current); infoTick++; true }
+                    Key.Info -> { infoTick++; true }
                     else -> false
                 }
             }
@@ -151,12 +176,15 @@ fun PlayerScreen(
             .focusable(),
     ) {
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            // Video không bao giờ nhận focus (nếu không, phím điều hướng sẽ bị "nuốt")
+            modifier = Modifier.fillMaxSize().focusProperties { canFocus = false },
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     useController = false
                     keepScreenOn = true
                     isFocusable = false
+                    isFocusableInTouchMode = false
+                    descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
                     this.player = exo
                 }
             },
@@ -175,7 +203,12 @@ fun PlayerScreen(
                     .padding(24.dp),
             )
         }
-        if (showInfo && !showList) {
+        AnimatedVisibility(
+            visible = showInfo && !showList,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(tween(250)) + slideInVertically(tween(250)) { it / 4 },
+            exit = fadeOut(tween(400)) + slideOutVertically(tween(400)) { it / 4 },
+        ) {
             InfoBar(
                 ch = current,
                 number = index + 1,
@@ -183,7 +216,7 @@ fun PlayerScreen(
                 now = now,
                 nowProg = nowPlaying(epg, current, now),
                 nextProg = nextPlaying(epg, current, now),
-                modifier = Modifier.align(Alignment.BottomCenter),
+                stream = streamInfo,
             )
         }
         if (showList) {
@@ -207,29 +240,67 @@ private fun InfoBar(
     now: Long,
     nowProg: Programme?,
     nextProg: Programme?,
+    stream: StreamInfo?,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier.fillMaxWidth().background(Color(0xE60B1220)).padding(horizontal = 40.dp, vertical = 24.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    val dateText = remember(now / 60_000) {
+        SimpleDateFormat("EEEE, dd/MM", Locale.getDefault()).format(Date(now))
+    }
+    Box(
+        modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    0f to Color.Transparent,
+                    0.35f to Color(0xD9070D18),
+                    1f to Color(0xF2070D18),
+                ),
+            )
+            .padding(start = 48.dp, end = 48.dp, top = 64.dp, bottom = 32.dp),
     ) {
-        Text("$number", style = MaterialTheme.typography.headlineLarge, color = Accent)
-        Spacer(Modifier.width(20.dp))
-        AsyncImage(model = ch.logo.ifBlank { null }, contentDescription = null, modifier = Modifier.size(64.dp))
-        Spacer(Modifier.width(20.dp))
-        Column(Modifier.weight(1f)) {
-            Text(ch.name + if (favorite) "  ★" else "", style = MaterialTheme.typography.titleLarge)
-            if (nowProg != null) {
-                Text("${hhmm(nowProg.start)}–${hhmm(nowProg.stop)}  ${nowProg.title}", color = Color.White, maxLines = 1)
-                LinearProgressIndicator(
-                    progress = { progressOf(nowProg, now) },
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("$number", style = MaterialTheme.typography.headlineLarge, color = Accent)
+            Spacer(Modifier.width(20.dp))
+            AsyncImage(model = ch.logo.ifBlank { null }, contentDescription = null, modifier = Modifier.size(72.dp))
+            Spacer(Modifier.width(24.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    ch.name + if (favorite) "  ★" else "",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+                if (nowProg != null) {
+                    Text(
+                        "${hhmm(nowProg.start)} – ${hhmm(nowProg.stop)}   ${nowProg.title}",
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    LinearProgressIndicator(
+                        progress = { progressOf(nowProg, now) },
+                        modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 8.dp),
+                    )
+                }
+                if (nextProg != null) {
+                    Text(
+                        "Tiếp theo: ${hhmm(nextProg.start)}  ${nextProg.title}",
+                        color = Dim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (stream != null) {
+                    StreamBadges(stream, Modifier.padding(top = 10.dp))
+                }
             }
-            if (nextProg != null) {
-                Text("Tiếp theo: ${hhmm(nextProg.start)}  ${nextProg.title}", color = Dim, maxLines = 1)
+            Spacer(Modifier.width(24.dp))
+            Column(horizontalAlignment = Alignment.End) {
+                Text(hhmm(now), fontSize = 40.sp, fontWeight = FontWeight.Light)
+                Text(dateText, color = Dim, fontSize = 14.sp)
             }
-            Text("OK: danh sách kênh   ▲▼: đổi kênh   MENU: yêu thích", color = Dim, modifier = Modifier.padding(top = 6.dp))
         }
     }
 }

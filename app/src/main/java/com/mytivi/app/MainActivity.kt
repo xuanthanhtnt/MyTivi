@@ -62,8 +62,13 @@ fun App(vm: MainViewModel = viewModel(), updates: UpdateViewModel = viewModel())
             initialUrl = vm.playlistUrl,
             initialEpg = vm.epgUrl,
             canCancel = vm.playlistUrl.isNotBlank(),
-            onSave = { url, epgUrl -> vm.savePlaylist(url, epgUrl); setup = false },
+            version = updates.currentVersion,
+            onSave = { url, epgUrl ->
+                if (url != vm.playlistUrl || epgUrl != vm.epgUrl) vm.savePlaylist(url, epgUrl)
+                setup = false
+            },
             onCancel = { setup = false },
+            onCheckUpdate = { updates.onButton() },
         )
         s != null -> PlayerScreen(
             list = s.list,
@@ -82,6 +87,6 @@ fun App(vm: MainViewModel = viewModel(), updates: UpdateViewModel = viewModel())
         )
     }
 
-    // Hộp thoại cập nhật (mở từ nút "Kiểm tra cập nhật" trong ngăn nhóm kênh)
+    // Hộp thoại cập nhật (mở từ Cài đặt hoặc ngăn nhóm kênh)
     UpdateDialog(updates)
 }
