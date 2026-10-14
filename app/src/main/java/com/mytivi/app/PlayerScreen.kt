@@ -63,6 +63,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -314,11 +318,25 @@ private fun ChannelPanel(
     onPick: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val focusCurrent = remember { FocusRequester() }
     val state = rememberLazyListState(initialFirstVisibleItemIndex = (current - 2).coerceAtLeast(0))
+    val scope = rememberCoroutineScope()
+    val jumpFocus = remember { FocusRequester() }
+    var target by remember { mutableIntStateOf(current) }     // hàng gắn jumpFocus
+    var focused by remember { mutableIntStateOf(current) }    // hàng đang được chọn
     LaunchedEffect(Unit) {
         withFrameNanos { }
-        runCatching { focusCurrent.requestFocus() }
+        runCatching { jumpFocus.requestFocus() }
+    }
+
+    /** Cuộn vòng: nhảy tới hàng i rồi đặt focus vào đó. */
+    fun jumpTo(i: Int) {
+        scope.launch {
+            target = i
+            state.scrollToItem((i - 2).coerceAtLeast(0))
+            withFrameNanos { }
+            withFrameNanos { }
+            runCatching { jumpFocus.requestFocus() }
+        }
     }
 
     LazyColumn(
@@ -327,13 +345,23 @@ private fun ChannelPanel(
             .fillMaxHeight()
             .width(440.dp)
             .background(Color(0xE60B1220))
-            .padding(12.dp),
+            .padding(12.dp)
+            .onPreviewKeyEvent { e ->
+                // Ở kênh đầu bấm ▲ -> kênh cuối; ở kênh cuối bấm ▼ -> kênh đầu
+                if (e.type != KeyEventType.KeyDown || list.isEmpty()) return@onPreviewKeyEvent false
+                when {
+                    e.key == Key.DirectionUp && focused <= 0 -> { jumpTo(list.lastIndex); true }
+                    e.key == Key.DirectionDown && focused >= list.lastIndex -> { jumpTo(0); true }
+                    else -> false
+                }
+            },
     ) {
         itemsIndexed(list) { i, ch ->
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .then(if (i == current) Modifier.focusRequester(focusCurrent) else Modifier)
+                    .then(if (i == target) Modifier.focusRequester(jumpFocus) else Modifier)
+                    .onFocusChanged { if (it.isFocused) focused = i }
                     .tvFocusable { onPick(i) }
                     .padding(10.dp),
                 verticalAlignment = Alignment.CenterVertically,

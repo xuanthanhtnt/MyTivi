@@ -18,6 +18,7 @@ Kotlin + Jetpack Compose + Media3 (ExoPlayer).
 - ☆ cạnh tên kênh để thêm/bỏ yêu thích; bấm Home hoặc TV tắt màn hình thì tự dừng tiếng
 - **Tự cập nhật**: playlist tải lại sau mỗi 3 giờ, EPG sau mỗi 6 giờ (kể cả khi box mở nhiều ngày liền);
   mở app là hiện ngay dữ liệu đã lưu rồi cập nhật ngầm; bấm *Làm mới* để cập nhật tay
+- **Cuộn vòng** danh sách kênh (bảng kênh và bảng chọn kênh toàn màn hình): ở kênh cuối bấm ▼ về kênh đầu, ở kênh đầu bấm ▲ xuống kênh cuối
 - Mở app là vào thẳng kênh xem gần nhất; tự thử lại khi mất luồng
 - Lưu cache playlist và EPG nên lần sau mở app có kênh và lịch ngay (ghi qua file tạm, không bao giờ ghi dở)
 - Bấm *Làm mới* liên tục không tạo nhiều lượt tải chồng nhau; kênh trùng hoàn toàn (cùng nhóm + cùng link) chỉ giữ 1

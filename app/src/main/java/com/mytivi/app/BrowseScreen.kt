@@ -79,6 +79,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -179,6 +181,18 @@ fun BrowseScreen(
     val rowFocus = remember { FocusRequester() }
     var focusIndex by remember { mutableIntStateOf(-1) }
     var focusTick by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
+
+    /** Đưa focus tới hàng kênh thứ idx (dùng khi cuộn vòng: cuối -> đầu, đầu -> cuối). */
+    fun focusRowAt(idx: Int) {
+        scope.launch {
+            focusIndex = idx
+            listState.scrollToItem(idx)
+            withFrameNanos { }
+            withFrameNanos { }
+            runCatching { rowFocus.requestFocus() }
+        }
+    }
     LaunchedEffect(focusTick, channels.isNotEmpty()) {
         if (shown.isEmpty() || showDrawer) return@LaunchedEffect
         val current = focusedChannel?.url
@@ -236,8 +250,22 @@ fun BrowseScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 .onPreviewKeyEvent { e ->
-                    // Đang ở hàng kênh đầu tiên mà bấm ▲: đứng yên, không cho focus chạy lên khung xem trước
-                    e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp && focusedNumber <= 1
+                    // Cuộn vòng: ở kênh đầu bấm ▲ -> kênh cuối; ở kênh cuối bấm ▼ -> kênh đầu.
+                    // (Đồng thời không cho focus chạy lên khung xem trước.)
+                    if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    val n = shown.size
+                    when {
+                        n == 0 -> e.key == Key.DirectionUp
+                        e.key == Key.DirectionUp && focusedNumber <= 1 -> {
+                            focusRowAt(n - 1)
+                            true
+                        }
+                        e.key == Key.DirectionDown && focusedNumber >= n -> {
+                            focusRowAt(0)
+                            true
+                        }
+                        else -> false
+                    }
                 },
         ) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
@@ -410,7 +438,7 @@ private fun InfoPanel(
                 )
             }
             Text(
-                "OK: toàn màn hình   ◄: nhóm kênh, làm mới, cài đặt",
+                "OK: Toàn Màn Hình     ◄: Nhóm Kênh",
                 color = Dim,
                 fontSize = 13.sp,
                 maxLines = 1,
