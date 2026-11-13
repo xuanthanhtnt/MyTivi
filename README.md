@@ -4,10 +4,11 @@ App phát playlist M3U / luồng HLS (.m3u8) với giao diện điều khiển b
 Kotlin + Jetpack Compose + Media3 (ExoPlayer).
 
 ## Tính năng
-- Thêm playlist bằng link (.m3u danh sách kênh, hoặc 1 link .m3u8 đơn)
+- **Nhiều danh sách kênh** (link .m3u, hoặc 1 link .m3u8 đơn) và **nhiều link EPG** – xem mục bên dưới
 - Nhóm kênh (group-title), logo kênh, tìm kiếm, kênh yêu thích
 - Xem toàn màn hình: ▲▼ / CH+ CH- đổi kênh, OK mở danh sách kênh, MENU thêm/bỏ yêu thích
-- EPG (XMLTV, hỗ trợ .gz): hiện chương trình đang phát + thanh tiến độ + chương trình tiếp theo
+- EPG (XMLTV, hỗ trợ .gz): hiện chương trình đang phát + thanh tiến độ + chương trình tiếp theo;
+  nhiều EPG được gộp theo `tvg-id`, link ở trên được ưu tiên
 - **Giao diện lịch phát sóng kiểu TiviMate**: khung xem trước + thông tin chương trình ở trên;
   bên dưới là thanh thời gian và bảng kênh với các ô chương trình, có vạch "bây giờ"
 - Lướt tới kênh/ô nào thì khung xem trước (bo góc mềm, **có tiếng**) tự chạy kênh đó
@@ -22,6 +23,24 @@ Kotlin + Jetpack Compose + Media3 (ExoPlayer).
 - Mở app là vào thẳng kênh xem gần nhất; tự thử lại khi mất luồng
 - Lưu cache playlist và EPG nên lần sau mở app có kênh và lịch ngay (ghi qua file tạm, không bao giờ ghi dở)
 - Bấm *Làm mới* liên tục không tạo nhiều lượt tải chồng nhau; kênh trùng hoàn toàn (cùng nhóm + cùng link) chỉ giữ 1
+
+## Nhiều danh sách kênh (M3U) và nhiều EPG
+Mở **Cài đặt** (◄ mở ngăn nhóm kênh > Cài đặt). Có 2 mục, mỗi nguồn là một hàng:
+
+| Trên hàng | Việc |
+|---|---|
+| Tên + link (bấm OK) | Sửa link / tên hiển thị |
+| Đang bật / Đang tắt | Bật hoặc tắt nguồn (tắt = tạm không dùng, không mất link) |
+| ▲ Lên | Đưa nguồn lên trên (thứ tự trong ngăn nhóm kênh; với EPG là thứ tự ưu tiên) |
+| Xóa | Xóa nguồn (có hỏi lại) |
+
+- **+ Thêm danh sách kênh** / **+ Thêm link EPG**: nhập link (bắt buộc) và tên (không bắt buộc, để trống thì tự đặt "Danh sách 2", "EPG 2"…).
+- Kênh của các danh sách **đang bật** được gộp lại. Có từ 2 danh sách trở lên thì ngăn nhóm kênh chia mục theo tên danh sách;
+  mỗi mục có **Tất cả kênh** của danh sách đó và các nhóm của nó. "★ Yêu thích" và "Tất cả" vẫn ở trên cùng.
+- **Tự dùng EPG ghi sẵn trong playlist (url-tvg)**: BẬT thì dùng thêm link EPG ghi ở dòng `#EXTM3U` của các playlist (sau các link tự thêm).
+- Thay đổi chỉ áp dụng khi bấm **Lưu** (Back / Hủy là bỏ). Phải có ít nhất 1 danh sách kênh đang bật.
+- Mỗi nguồn có cache riêng: một nguồn tải lỗi thì vẫn dùng bản đã lưu của nguồn đó, các nguồn khác không ảnh hưởng.
+- Cập nhật từ bản cũ (1 link): link cũ tự chuyển thành "Danh sách 1" / "EPG 1", không phải nhập lại.
 
 ## Thanh thông tin khi xem kênh
 - Vào kênh hoặc đổi kênh: thanh thông tin hiện ở cạnh dưới khoảng 5 giây rồi mờ dần (bấm INFO trên remote để hiện lại).
@@ -54,18 +73,18 @@ Kotlin + Jetpack Compose + Media3 (ExoPlayer).
 | `M3uParser.kt` | Đọc #EXTINF (tvg-id, tvg-logo, group-title...) |
 | `EpgParser.kt` | Đọc XMLTV, chỉ giữ -2h..+24h |
 | `Http.kt` | Tải playlist/EPG bằng OkHttp, lưu file cache, tự giải nén gzip |
-| `MainViewModel.kt` | Trạng thái: kênh, yêu thích, EPG, cache |
+| `MainViewModel.kt`, `Prefs.kt` | Trạng thái: kênh (gộp nhiều danh sách), yêu thích, EPG (gộp nhiều link), cache theo từng nguồn |
 | `BrowseScreen.kt` | Màn hình chính: xem trước + bảng lịch kênh/chương trình |
 | `GuideModel.kt` | Chia EPG thành các ô trên bảng lịch |
 | `Updater.kt`, `UpdateViewModel.kt`, `UpdateDialog.kt` | Kiểm tra, tải và cài bản cập nhật từ GitHub Releases |
 | `PlayerFactory.kt` | Tạo ExoPlayer dùng chung (xem trước + toàn màn hình) |
 | `PlayerScreen.kt` | Trình phát ExoPlayer, thanh thông tin, bảng chọn kênh |
 | `StreamInfo.kt` | Đọc thông số luồng (độ phân giải, fps, codec, bitrate) cho thanh thông tin |
-| `SetupScreen.kt` | Nhập link playlist / EPG, xem phiên bản, kiểm tra cập nhật |
+| `SetupScreen.kt` | Cài đặt: nhiều danh sách kênh + nhiều link EPG, xem phiên bản, kiểm tra cập nhật |
 
 ## Hạn chế hiện tại / việc nên làm tiếp
 - EPG ghép theo `tvg-id`; kênh không có tvg-id sẽ không hiện lịch.
-- Chưa có: nhập số kênh bằng phím số, ghi hình, catch-up, multiview, khóa phụ huynh, Xtream Codes, nhiều playlist.
+- Chưa có: nhập số kênh bằng phím số, ghi hình, catch-up, multiview, khóa phụ huynh, Xtream Codes.
 - Link kiểu `url|User-Agent=...` (header riêng) chưa được hỗ trợ.
 
 Chỉ dùng với nội dung bạn có quyền xem.
