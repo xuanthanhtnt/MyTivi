@@ -44,7 +44,7 @@ class PlaySession(val list: List<Channel>, val index: Int)
 @Composable
 fun App(vm: MainViewModel = viewModel(), updates: UpdateViewModel = viewModel()) {
     var session by remember { mutableStateOf<PlaySession?>(null) }
-    var setup by remember { mutableStateOf(vm.playlistUrl.isBlank()) }
+    var setup by remember { mutableStateOf(!vm.hasPlaylists) }
     var autoStarted by remember { mutableStateOf(false) }
 
     // Mở app là vào thẳng kênh xem gần nhất (như TiviMate)
@@ -59,12 +59,15 @@ fun App(vm: MainViewModel = viewModel(), updates: UpdateViewModel = viewModel())
     val s = session
     when {
         setup -> SetupScreen(
-            initialUrl = vm.playlistUrl,
-            initialEpg = vm.epgUrl,
-            canCancel = vm.playlistUrl.isNotBlank(),
+            initialPlaylists = vm.playlists,
+            initialEpgs = vm.epgSources,
+            initialUseAutoEpg = vm.useAutoEpg,
+            canCancel = vm.hasPlaylists,
             version = updates.currentVersion,
-            onSave = { url, epgUrl ->
-                if (url != vm.playlistUrl || epgUrl != vm.epgUrl) vm.savePlaylist(url, epgUrl)
+            onSave = { newPlaylists, newEpgs, autoEpg ->
+                if (newPlaylists != vm.playlists || newEpgs != vm.epgSources || autoEpg != vm.useAutoEpg) {
+                    vm.saveSources(newPlaylists, newEpgs, autoEpg)
+                }
                 setup = false
             },
             onCancel = { setup = false },

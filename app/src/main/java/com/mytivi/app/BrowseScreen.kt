@@ -109,21 +109,15 @@ fun BrowseScreen(
     val epg = vm.epg
     val now = rememberNow()
 
-    var sel by remember { mutableIntStateOf(1) }          // 0 = Yêu thích, 1 = Tất cả, 2.. = nhóm
+    var selKey by remember { mutableStateOf("all") }      // mã dòng nhóm đang chọn (xem GroupEntry.key)
     var query by remember { mutableStateOf("") }
     var showDrawer by remember { mutableStateOf(false) }
-    val groups = remember(channels) { channels.map { it.group }.distinct() }
-    val labels = remember(groups) { listOf("★ Yêu thích", "Tất cả") + groups }
-    val counts = remember(channels, favorites, groups) {
-        val byGroup = channels.groupingBy { it.group }.eachCount()
-        listOf(channels.count { it.url in favorites }, channels.size) + groups.map { byGroup[it] ?: 0 }
-    }
-    val shown = remember(channels, favorites, groups, sel, query) {
-        val base = when (sel) {
-            0 -> channels.filter { it.url in favorites }
-            1 -> channels
-            else -> groups.getOrNull(sel - 2)?.let { g -> channels.filter { it.group == g } } ?: channels
-        }
+    // Dòng nhóm: Yêu thích, Tất cả, rồi nhóm của từng danh sách kênh (chia mục khi có ≥ 2 danh sách)
+    val entries = remember(channels, favorites, vm.playlists) { buildGroupEntries(channels, favorites, vm.playlists) }
+    // Nhóm đang chọn không còn (đổi/xóa danh sách) thì về "Tất cả"
+    val selEntry = entries.firstOrNull { it.key == selKey && !it.header } ?: entries[1]
+    val shown = remember(channels, favorites, selEntry, query) {
+        val base = channelsFor(selEntry, channels, favorites)
         if (query.isBlank()) base else base.filter { it.name.contains(query, ignoreCase = true) }
     }
 
@@ -270,7 +264,8 @@ fun BrowseScreen(
         ) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 // Khóa ổn định theo kênh: làm mới danh sách không làm hàng cũ bị vẽ lặp
-                itemsIndexed(shown, key = { _, ch -> ch.group + "\u0000" + ch.url }) { i, ch ->
+                // (gồm cả mã danh sách: cùng một kênh có thể nằm trong 2 danh sách khác nhau)
+                itemsIndexed(shown, key = { _, ch -> ch.src + "\u0000" + ch.group + "\u0000" + ch.url }) { i, ch ->
                     GuideRow(
                         number = i + 1,
                         ch = ch,
@@ -295,7 +290,7 @@ fun BrowseScreen(
             if (shown.isEmpty()) {
                 Text(
                     when {
-                        sel == 0 -> "Chưa có kênh yêu thích. Bấm ☆ cạnh tên kênh để thêm."
+                        selEntry.key == "fav" -> "Chưa có kênh yêu thích. Bấm ☆ cạnh tên kênh để thêm."
                         vm.loading -> "Đang tải danh sách kênh…"
                         else -> "Không có kênh nào."
                     },
@@ -314,15 +309,14 @@ fun BrowseScreen(
     ) {
         val updated = if (vm.lastUpdated > 0) " · cập nhật ${hhmm(vm.lastUpdated)}" else ""
         GroupDrawer(
-            labels = labels,
-            counts = counts,
-            selected = sel,
+            entries = entries,
+            selectedKey = selEntry.key,
             query = query,
             status = "${channels.size} kênh$updated",
             loading = vm.loading,
             error = vm.error,
             onQuery = { query = it },
-            onHover = { sel = it },
+            onHover = { selKey = it },
             onRefresh = { vm.refresh() },
             onSettings = onSettings,
             updateLabel = when (val u = updates.state) {
@@ -623,15 +617,14 @@ private fun GuideCell(cell: Cell, now: Long, onFocus: () -> Unit, onPlay: () -> 
 
 @Composable
 private fun GroupDrawer(
-    labels: List<String>,
-    counts: List<Int>,
-    selected: Int,
+    entries: List<GroupEntry>,
+    selectedKey: String,
     query: String,
     status: String,
     loading: Boolean,
     error: String?,
     onQuery: (String) -> Unit,
-    onHover: (Int) -> Unit,
+    onHover: (String) -> Unit,
     onRefresh: () -> Unit,
     onSettings: () -> Unit,
     updateLabel: String,
@@ -641,9 +634,10 @@ private fun GroupDrawer(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val initial = remember { selected }
+    val initial = remember { selectedKey }
     val focusInitial = remember { FocusRequester() }
-    val state = rememberLazyListState(initialFirstVisibleItemIndex = (selected - 3).coerceAtLeast(0))
+    val selectedIndex = entries.indexOfFirst { it.key == selectedKey }
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = (selectedIndex - 3).coerceAtLeast(0))
     LaunchedEffect(Unit) {
         withFrameNanos { }
         withFrameNanos { }
@@ -679,25 +673,44 @@ private fun GroupDrawer(
         )
         Spacer(Modifier.height(8.dp))
         LazyColumn(state = state, modifier = Modifier.weight(1f).fillMaxWidth()) {
-            itemsIndexed(labels) { i, label ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .then(if (i == initial) Modifier.focusRequester(focusInitial) else Modifier)
-                        .onFocusChanged { if (it.isFocused) onHover(i) }   // di chuyển tới nhóm nào, danh sách kênh đổi theo
-                        .tvFocusable(onClose)
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        label,
-                        color = if (i == selected) Accent else Color.White,
-                        fontWeight = if (i == selected) FontWeight.Bold else FontWeight.Normal,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text("${counts.getOrElse(i) { 0 }}", color = Dim, fontSize = 13.sp)
+            itemsIndexed(entries, key = { _, e -> e.key }) { _, e ->
+                if (e.header) {
+                    // Tiêu đề mục = tên danh sách kênh (chỉ có khi dùng từ 2 danh sách); không nhận focus
+                    Row(
+                        Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            e.label.uppercase(),
+                            color = Accent,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text("${e.count} kênh", color = Dim, fontSize = 12.sp)
+                    }
+                } else {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .then(if (e.key == initial) Modifier.focusRequester(focusInitial) else Modifier)
+                            .onFocusChanged { if (it.isFocused) onHover(e.key) }   // di chuyển tới nhóm nào, danh sách kênh đổi theo
+                            .tvFocusable(onClose)
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            e.label,
+                            color = if (e.key == selectedKey) Accent else Color.White,
+                            fontWeight = if (e.key == selectedKey) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text("${e.count}", color = Dim, fontSize = 13.sp)
+                    }
                 }
             }
         }
